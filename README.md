@@ -6,6 +6,8 @@ This card is **specifically built to work with the data and service calls provid
 
 For movies, this card includes an advanced feature: after successfully adding a movie, it attempts to find a better quality release by immediately triggering a `MoviesSearch` command directly against your Radarr instance using the provided configuration details.
 
+<img width="513" height="623" alt="image" src="https://github.com/user-attachments/assets/8b2d2e7d-7fd4-4718-930d-a8ba93b4564a" />
+
 ---
 
 ## 🛠 Installation
