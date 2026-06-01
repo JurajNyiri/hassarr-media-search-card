@@ -14,7 +14,7 @@ This card is **specifically built to work with the data and service calls provid
 
 The easiest way to install the Hassarr Media Search Card is via HACS.
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=SpaceFrags&repository=hassarr-media-search-card&category=plugin)
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=JurajNyiri&repository=hassarr-media-search-card&category=plugin)
 
 ### Option 2: Manual HACS Installation
 
