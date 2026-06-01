@@ -4,8 +4,6 @@ A custom Lovelace card for Home Assistant that enables quick searching of Movies
 
 This card is **specifically built to work with the data and service calls provided by the [Hassarr Integration](https://github.com/TegridyTate/Hassarr)**.
 
-For movies, this card includes an advanced feature: after successfully adding a movie, it attempts to find a better quality release by immediately triggering a `MoviesSearch` command directly against your Radarr instance using the provided configuration details.
-
 <img width="513" height="623" alt="image" src="https://github.com/user-attachments/assets/8b2d2e7d-7fd4-4718-930d-a8ba93b4564a" />
 
 ---
@@ -53,8 +51,14 @@ These settings are necessary for the core functionality of the card.
 | Setting | Required | Type | Description |
 | :--- | :---: | :--- | :--- |
 | **`tmdb_api_key`** | **Yes** | `string` | Your The Movie Database (TMDB) API key for searching the movie/TV database. |
-| **`radarr_url`** | **No** | `string` | The full URL and port of your Radarr instance (e.g., `http://192.168.1.10:7878`). **Required only for the "Add & Update Quality" feature.** |
-| **`radarr_api_key`** | **No** | `string` | Your Radarr API key. **Required only for the "Add & Update Quality" feature.** |
+
+### Automatic Hassarr Instance Selection
+
+The card now auto-detects Hassarr config entries and shows a **Target Instance** selector.
+
+- It queries Home Assistant config entries (`domain: hassarr`) and uses the entry display title (the nice name from HA).
+- It automatically routes Add Movie/Add TV calls to the selected Hassarr instance.
+- If HA does not expose config entry names to the card, it falls back to instance suffix-based names.
 
 ### Optional Visual Customization
 
@@ -77,14 +81,7 @@ type: custom:hassarr-media-search-card
 # Required for searching
 tmdb_api_key: !secret tmdb_api_key
 
-# Optional but recommended for the "Add & Update Quality" feature
-# If these are omitted, the card will only send the initial 'add' command via Hassarr.
-radarr_url: '[http://192.168.1.10:7878](http://192.168.1.10:7878)' 
-radarr_api_key: !secret radarr_api_key
-
 # Optional Customization
 custom_title: 'Request Media'
 show_title: true
 add_button_color: '#8A2BE2' # Custom button color (Blue Violet)
-
-

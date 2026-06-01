@@ -18,12 +18,26 @@
 // Debounce utility function to limit API calls while typing
 const debounce = (func, delay) => {
     let timeout;
-    return function(...args) {
+    return function (...args) {
         const context = this;
         clearTimeout(timeout);
         timeout = setTimeout(() => func.apply(context, args), delay);
     };
 };
+
+const HASSARR_DOMAIN = 'hassarr';
+const MOVIE_SERVICE_BASE = 'add_radarr_movie';
+const TV_SERVICE_BASE = 'add_sonarr_tv_show';
+
+const extractServiceSuffix = (serviceName, baseName) => {
+    const prefix = `${baseName}_`;
+    if (!serviceName.startsWith(prefix)) {
+        return null;
+    }
+    return serviceName.slice(prefix.length);
+};
+
+const asArray = (value) => (Array.isArray(value) ? value : []);
 
 /**
  * Main React component for the Home Assistant TMDB Search Card.
@@ -32,7 +46,7 @@ const debounce = (func, delay) => {
  *
  * @param {object} props - The component props.
  * @param {object} props.hass - The Home Assistant object, providing access to service calls.
- * @param {object} props.config - The card configuration, including the TMDB API key, Radarr URL, and API key.
+ * @param {object} props.config - The card configuration, including the TMDB API key.
  */
 const App = ({ hass, config }) => {
     // State variables for managing UI and data, using window.React.useState
@@ -42,10 +56,13 @@ const App = ({ hass, config }) => {
     const [error, setError] = window.React.useState(null);
     const [message, setMessage] = window.React.useState(''); // For success/error messages after adding content
 
+    const [instanceOptions, setInstanceOptions] = window.React.useState([]);
+    const [selectedInstanceValue, setSelectedInstanceValue] = window.React.useState('');
+    const [loadingInstances, setLoadingInstances] = window.React.useState(false);
+    const [instanceStatus, setInstanceStatus] = window.React.useState('');
+
     // Retrieve API keys and configuration options from the card configuration
     const TMDB_API_KEY = config.tmdb_api_key;
-    const RADARR_URL = config.radarr_url;
-    const RADARR_API_KEY = config.radarr_api_key;
     const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
     const POSTER_BASE_URL = 'https://image.tmdb.org/t/p/w185';
 
@@ -58,6 +75,199 @@ const App = ({ hass, config }) => {
     const descriptionTextColor = config.description_text_color || 'var(--secondary-text-color, #D1D5DB)';
     const addButtonColor = config.add_button_color || 'var(--success-color, #4CAF50)';
 
+    const selectedInstance = window.React.useMemo(
+        () => instanceOptions.find((option) => option.value === selectedInstanceValue) || null,
+        [instanceOptions, selectedInstanceValue]
+    );
+
+    const serviceSignature = window.React.useMemo(() => {
+        const hassarrServices = hass && hass.services && hass.services[HASSARR_DOMAIN] ? hass.services[HASSARR_DOMAIN] : {};
+        return Object.keys(hassarrServices).sort().join('|');
+    }, [hass && hass.services && hass.services[HASSARR_DOMAIN]]);
+
+    const fetchHassarrEntries = window.React.useCallback(async () => {
+        if (!hass) {
+            return [];
+        }
+
+        if (typeof hass.callWS === 'function') {
+            try {
+                const wsEntries = await hass.callWS({ type: 'config_entries/get' });
+                if (Array.isArray(wsEntries)) {
+                    return wsEntries;
+                }
+            } catch (wsError) {
+                console.warn('Failed to load config entries via callWS(config_entries/get):', wsError);
+            }
+        }
+
+        if (typeof hass.callApi === 'function') {
+            const endpoints = ['config/config_entries/entry', 'config/config_entries'];
+            for (const endpoint of endpoints) {
+                try {
+                    const apiEntries = await hass.callApi('GET', endpoint);
+                    if (Array.isArray(apiEntries)) {
+                        return apiEntries;
+                    }
+                } catch (apiError) {
+                    console.warn(`Failed to load config entries via callApi(${endpoint}):`, apiError);
+                }
+            }
+        }
+
+        return [];
+    }, [hass && hass.callWS, hass && hass.callApi]);
+
+    const discoverInstances = window.React.useCallback(async () => {
+        if (!hass) {
+            setInstanceOptions([]);
+            setSelectedInstanceValue('');
+            setInstanceStatus('');
+            return;
+        }
+
+        const hassarrServices = hass.services && hass.services[HASSARR_DOMAIN] ? hass.services[HASSARR_DOMAIN] : {};
+        const serviceNames = Object.keys(hassarrServices);
+
+        if (serviceNames.length === 0) {
+            setInstanceOptions([]);
+            setSelectedInstanceValue('');
+            setInstanceStatus('No Hassarr services found.');
+            return;
+        }
+
+        const hasBaseMovieService = Boolean(hassarrServices[MOVIE_SERVICE_BASE]);
+        const hasBaseTvService = Boolean(hassarrServices[TV_SERVICE_BASE]);
+
+        const capabilityBySuffix = {};
+        for (const serviceName of serviceNames) {
+            const movieSuffix = extractServiceSuffix(serviceName, MOVIE_SERVICE_BASE);
+            if (movieSuffix) {
+                capabilityBySuffix[movieSuffix] = capabilityBySuffix[movieSuffix] || { hasMovie: false, hasTv: false };
+                capabilityBySuffix[movieSuffix].hasMovie = true;
+            }
+
+            const tvSuffix = extractServiceSuffix(serviceName, TV_SERVICE_BASE);
+            if (tvSuffix) {
+                capabilityBySuffix[tvSuffix] = capabilityBySuffix[tvSuffix] || { hasMovie: false, hasTv: false };
+                capabilityBySuffix[tvSuffix].hasTv = true;
+            }
+        }
+
+        setLoadingInstances(true);
+        let discoveredEntries = [];
+        let usedFallbackNames = false;
+
+        try {
+            discoveredEntries = await fetchHassarrEntries();
+        } finally {
+            setLoadingInstances(false);
+        }
+
+        const hassarrEntries = asArray(discoveredEntries)
+            .filter((entry) => entry && entry.domain === HASSARR_DOMAIN)
+            .map((entry, index) => {
+                const entryId = entry.entry_id || entry.entryId || entry.id;
+                if (!entryId || typeof entryId !== 'string') {
+                    return null;
+                }
+
+                const suffix = entryId.slice(0, 8);
+                const capability = capabilityBySuffix[suffix] || { hasMovie: false, hasTv: false };
+                const movieService = capability.hasMovie ? `${MOVIE_SERVICE_BASE}_${suffix}` : hasBaseMovieService ? MOVIE_SERVICE_BASE : null;
+                const tvService = capability.hasTv ? `${TV_SERVICE_BASE}_${suffix}` : hasBaseTvService ? TV_SERVICE_BASE : null;
+
+                if (!movieService && !tvService) {
+                    return null;
+                }
+
+                const title = entry.title || entry.name || `Hassarr ${index + 1}`;
+                return {
+                    value: entryId,
+                    entry_id: entryId,
+                    suffix,
+                    title,
+                    displayName: title,
+                    movieService,
+                    tvService,
+                    includeInstanceField: movieService === MOVIE_SERVICE_BASE || tvService === TV_SERVICE_BASE,
+                };
+            })
+            .filter(Boolean);
+
+        let options = hassarrEntries;
+
+        if (options.length === 0) {
+            const suffixes = Object.keys(capabilityBySuffix);
+            if (suffixes.length > 0) {
+                usedFallbackNames = true;
+                options = suffixes.map((suffix) => {
+                    const capability = capabilityBySuffix[suffix] || { hasMovie: false, hasTv: false };
+                    return {
+                        value: suffix,
+                        entry_id: null,
+                        suffix,
+                        title: `Hassarr ${suffix}`,
+                        displayName: `Hassarr ${suffix}`,
+                        movieService: capability.hasMovie ? `${MOVIE_SERVICE_BASE}_${suffix}` : hasBaseMovieService ? MOVIE_SERVICE_BASE : null,
+                        tvService: capability.hasTv ? `${TV_SERVICE_BASE}_${suffix}` : hasBaseTvService ? TV_SERVICE_BASE : null,
+                        includeInstanceField: false,
+                    };
+                });
+            }
+        }
+
+        // Last fallback for very old setup where only base services exist
+        if (options.length === 0 && (hasBaseMovieService || hasBaseTvService)) {
+            options = [
+                {
+                    value: 'default',
+                    entry_id: null,
+                    suffix: null,
+                    title: 'Default Hassarr',
+                    displayName: 'Default Hassarr',
+                    movieService: hasBaseMovieService ? MOVIE_SERVICE_BASE : null,
+                    tvService: hasBaseTvService ? TV_SERVICE_BASE : null,
+                    includeInstanceField: false,
+                },
+            ];
+        }
+
+        // If there are duplicate titles, append short suffix for disambiguation
+        const titleCounts = options.reduce((acc, option) => {
+            acc[option.title] = (acc[option.title] || 0) + 1;
+            return acc;
+        }, {});
+
+        const normalizedOptions = options.map((option) => {
+            if (titleCounts[option.title] > 1 && option.suffix) {
+                return { ...option, displayName: `${option.title} (${option.suffix})` };
+            }
+            return option;
+        });
+
+        setInstanceOptions(normalizedOptions);
+
+        setSelectedInstanceValue((currentValue) => {
+            if (!currentValue || !normalizedOptions.find((option) => option.value === currentValue)) {
+                return normalizedOptions[0] ? normalizedOptions[0].value : '';
+            }
+            return currentValue;
+        });
+
+        if (normalizedOptions.length === 0) {
+            setInstanceStatus('No Radarr/Sonarr Hassarr instances found.');
+        } else if (usedFallbackNames) {
+            setInstanceStatus('Loaded instances from service names. Entry display names were not available from Home Assistant.');
+        } else {
+            setInstanceStatus('');
+        }
+    }, [hass && hass.services && hass.services[HASSARR_DOMAIN], fetchHassarrEntries]);
+
+    window.React.useEffect(() => {
+        discoverInstances();
+    }, [discoverInstances, serviceSignature]);
+
     /**
      * Fetches movie/TV show results from TMDB based on the search query.
      * This function is debounced to limit API calls while typing.
@@ -66,99 +276,102 @@ const App = ({ hass, config }) => {
      *
      * @param {string} query - The search term entered by the user.
      */
-    const fetchTmdbResults = window.React.useCallback(debounce(async (query) => {
-        if (!query.trim()) {
-            setSearchResults([]);
-            return;
-        }
-        if (!TMDB_API_KEY) {
-            setError('TMDB API Key is not configured. Please add it to your card configuration.');
-            return;
-        }
-
-        setLoading(true);
-        setError(null);
-        setMessage('');
-
-        try {
-            const searchUrl = `${TMDB_BASE_URL}/search/multi?query=${encodeURIComponent(query)}&api_key=${TMDB_API_KEY}`;
-            const searchResponse = await fetch(searchUrl);
-
-            if (!searchResponse.ok) {
-                throw new Error(`TMDB search failed: ${searchResponse.statusText} (${searchResponse.status})`);
+    const fetchTmdbResults = window.React.useCallback(
+        debounce(async (query) => {
+            if (!query.trim()) {
+                setSearchResults([]);
+                return;
             }
-            const searchData = await searchResponse.json();
+            if (!TMDB_API_KEY) {
+                setError('TMDB API Key is not configured. Please add it to your card configuration.');
+                return;
+            }
 
-            const results = [];
-            for (const item of searchData.results.slice(0, 5)) {
-                if (item.media_type === 'movie') {
-                    results.push({
-                        id: `tmdb:${item.id}`,
-                        title: item.title,
-                        release_date: item.release_date,
-                        poster_path: item.poster_path,
-                        media_type: 'movie',
-                        tmdb_id: item.id,
-                        vote_average: item.vote_average
-                    });
-                } else if (item.media_type === 'tv') {
-                    const externalIdsUrl = `${TMDB_BASE_URL}/tv/${item.id}/external_ids?api_key=${TMDB_API_KEY}`;
-                    const externalIdsResponse = await fetch(externalIdsUrl);
+            setLoading(true);
+            setError(null);
+            setMessage('');
 
-                    if (!externalIdsResponse.ok) {
-                        console.warn(`Could not fetch external IDs for TV show "${item.name}" (TMDB ID: ${item.id}). Falling back.`);
+            try {
+                const searchUrl = `${TMDB_BASE_URL}/search/multi?query=${encodeURIComponent(query)}&api_key=${TMDB_API_KEY}`;
+                const searchResponse = await fetch(searchUrl);
+
+                if (!searchResponse.ok) {
+                    throw new Error(`TMDB search failed: ${searchResponse.statusText} (${searchResponse.status})`);
+                }
+                const searchData = await searchResponse.json();
+
+                const results = [];
+                for (const item of searchData.results.slice(0, 5)) {
+                    if (item.media_type === 'movie') {
                         results.push({
                             id: `tmdb:${item.id}`,
-                            title: item.name,
-                            first_air_date: item.first_air_date,
+                            title: item.title,
+                            release_date: item.release_date,
                             poster_path: item.poster_path,
-                            media_type: 'tv',
+                            media_type: 'movie',
                             tmdb_id: item.id,
-                            vote_average: item.vote_average
+                            vote_average: item.vote_average,
                         });
-                        continue;
-                    }
-                    const externalIdsData = await externalIdsResponse.json();
+                    } else if (item.media_type === 'tv') {
+                        const externalIdsUrl = `${TMDB_BASE_URL}/tv/${item.id}/external_ids?api_key=${TMDB_API_KEY}`;
+                        const externalIdsResponse = await fetch(externalIdsUrl);
 
-                    if (externalIdsData.tvdb_id) {
-                        results.push({
-                            id: `tvdb:${externalIdsData.tvdb_id}`,
-                            title: item.name,
-                            first_air_date: item.first_air_date,
-                            poster_path: item.poster_path,
-                            media_type: 'tv',
-                            tmdb_id: item.id,
-                            vote_average: item.vote_average
-                        });
-                    } else {
-                        console.warn(`TVDB ID not found for TV show "${item.name}" (TMDB ID: ${item.id}). Falling back.`);
-                        results.push({
-                            id: `tmdb:${item.id}`,
-                            title: item.name,
-                            first_air_date: item.first_air_date,
-                            poster_path: item.poster_path,
-                            media_type: 'tv',
-                            tmdb_id: item.id,
-                            vote_average: item.vote_average
-                        });
+                        if (!externalIdsResponse.ok) {
+                            console.warn(`Could not fetch external IDs for TV show "${item.name}" (TMDB ID: ${item.id}). Falling back.`);
+                            results.push({
+                                id: `tmdb:${item.id}`,
+                                title: item.name,
+                                first_air_date: item.first_air_date,
+                                poster_path: item.poster_path,
+                                media_type: 'tv',
+                                tmdb_id: item.id,
+                                vote_average: item.vote_average,
+                            });
+                            continue;
+                        }
+                        const externalIdsData = await externalIdsResponse.json();
+
+                        if (externalIdsData.tvdb_id) {
+                            results.push({
+                                id: `tvdb:${externalIdsData.tvdb_id}`,
+                                title: item.name,
+                                first_air_date: item.first_air_date,
+                                poster_path: item.poster_path,
+                                media_type: 'tv',
+                                tmdb_id: item.id,
+                                vote_average: item.vote_average,
+                            });
+                        } else {
+                            console.warn(`TVDB ID not found for TV show "${item.name}" (TMDB ID: ${item.id}). Falling back.`);
+                            results.push({
+                                id: `tmdb:${item.id}`,
+                                title: item.name,
+                                first_air_date: item.first_air_date,
+                                poster_path: item.poster_path,
+                                media_type: 'tv',
+                                tmdb_id: item.id,
+                                vote_average: item.vote_average,
+                            });
+                        }
                     }
                 }
+                setSearchResults(results);
+            } catch (err) {
+                setError(`Failed to fetch results: ${err.message}`);
+                console.error('TMDB fetch error:', err);
+            } finally {
+                setLoading(false);
             }
-            setSearchResults(results);
-        } catch (err) {
-            setError(`Failed to fetch results: ${err.message}`);
-            console.error('TMDB fetch error:', err);
-        } finally {
-            setLoading(false);
-        }
-    }, 500), []);
+        }, 500),
+        [TMDB_API_KEY]
+    );
 
     window.React.useEffect(() => {
         fetchTmdbResults(searchTerm);
     }, [searchTerm, fetchTmdbResults]);
 
     /**
-     * Handles adding content to Radarr/Sonarr and triggers a quality search for movies.
+     * Handles adding content to Radarr/Sonarr through Hassarr.
      *
      * @param {object} item - The selected movie/TV show item from searchResults.
      */
@@ -168,67 +381,43 @@ const App = ({ hass, config }) => {
             return;
         }
 
+        if (!selectedInstance) {
+            setError('No Hassarr target instance selected.');
+            return;
+        }
+
+        const isMovie = item.media_type === 'movie';
+        const selectedService = isMovie ? selectedInstance.movieService : selectedInstance.tvService;
+
+        if (!selectedService) {
+            setError(`Selected instance "${selectedInstance.displayName}" does not support ${isMovie ? 'movies' : 'TV shows'}.`);
+            return;
+        }
+
+        const serviceData = { title: item.id };
+
+        // For shared service names, pass entry_id so Hassarr can route to the right config entry.
+        if (selectedInstance.includeInstanceField && selectedInstance.entry_id) {
+            serviceData.instance = selectedInstance.entry_id;
+        }
+
         setLoading(true);
         setMessage('');
         setError(null);
 
         try {
-            if (item.media_type === 'movie') {
-                // 1. Send the command to hassarr to add the movie
-                await hass.callService('hassarr', 'add_radarr_movie', { title: item.id });
-                setMessage(`Successfully sent movie "${item.title}" to Radarr!`);
+            await hass.callService(HASSARR_DOMAIN, selectedService, serviceData);
 
-                // 2. After a short delay, try to get the movieId from Radarr directly
-                // This gives Radarr a moment to process the new movie.
-                await new Promise(resolve => setTimeout(resolve, 3000));
-
-                if (!RADARR_URL || !RADARR_API_KEY) {
-                    setMessage(`Movie added to Radarr, but unable to trigger quality search. Radarr URL and/or API Key not configured.`);
-                    setLoading(false);
-                    return;
-                }
-
-                // Get Radarr's internal movieId using the TMDB ID
-                const movieIdUrl = `${RADARR_URL}/api/v3/movie?tmdbId=${item.tmdb_id}&apikey=${RADARR_API_KEY}`;
-                const movieIdResponse = await fetch(movieIdUrl);
-                const movieData = await movieIdResponse.json();
-
-                if (movieData.length > 0 && movieData[0].id) {
-                    const movieId = movieData[0].id;
-
-                    // Trigger a MoviesSearch command to find better quality
-                    const searchCommandUrl = `${RADARR_URL}/api/v3/command?apikey=${RADARR_API_KEY}`;
-                    const searchCommandBody = {
-                        name: "MoviesSearch",
-                        movieIds: [movieId]
-                    };
-
-                    const searchResponse = await fetch(searchCommandUrl, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify(searchCommandBody)
-                    });
-
-                    if (searchResponse.ok) {
-                        setMessage(`Movie added to Radarr and quality search successfully triggered!`);
-                    } else {
-                        setMessage(`Movie added, but failed to trigger quality search: ${searchResponse.statusText}.`);
-                        console.error('Radarr search command error:', searchResponse.statusText);
-                    }
-                } else {
-                    setMessage(`Movie added to Radarr, but couldn't find its ID to trigger quality search.`);
-                }
-            } else if (item.media_type === 'tv') {
-                // For TV shows, just send the command to hassarr
-                await hass.callService('hassarr', 'add_sonarr_tv_show', { title: item.id });
-                setMessage(`Successfully sent TV show "${item.title}" to Sonarr!`);
+            if (isMovie) {
+                setMessage(`Successfully sent movie "${item.title}" to ${selectedInstance.displayName}!`);
+            } else {
+                setMessage(`Successfully sent TV show "${item.title}" to ${selectedInstance.displayName}!`);
             }
+
             setSearchTerm('');
             setSearchResults([]);
         } catch (err) {
-            setError(`Failed to add content: ${err.message}. Please check Home Assistant and your Radarr/Sonarr setup.`);
+            setError(`Failed to add content: ${err.message}. Please check Home Assistant and your Hassarr setup.`);
             console.error('Home Assistant service call or API error:', err);
         } finally {
             setLoading(false);
@@ -237,13 +426,13 @@ const App = ({ hass, config }) => {
 
     // Render the component
     return window.React.createElement(
-        "div",
+        'div',
         {
-            className: "p-4 bg-gray-800 text-gray-100 rounded-lg shadow-lg font-inter border border-gray-700",
+            className: 'p-4 bg-gray-800 text-gray-100 rounded-lg shadow-lg font-inter border border-gray-700',
         },
         // Custom CSS for Pulsarr-like styling and scrollbar
         window.React.createElement(
-            "style",
+            'style',
             null,
             `
                 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
@@ -254,6 +443,10 @@ const App = ({ hass, config }) => {
                 .results-container::-webkit-scrollbar-thumb:hover { background: #9CA3AF; }
                 .header { font-size: 1.5em; font-weight: bold; margin-bottom: 16px; color: var(--primary-color, #4CAF50); display: flex; align-items: center; gap: 8px; }
                 .header ha-icon { color: var(--primary-color, #4CAF50); }
+                .instance-selector { margin-bottom: 16px; }
+                .instance-label { display: block; margin-bottom: 8px; font-size: 0.85em; font-weight: 600; color: ${descriptionTextColor}; text-transform: uppercase; letter-spacing: 0.04em; }
+                .instance-select { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid var(--divider-color, #4B5563); background-color: #111827; color: var(--primary-text-color, #F3F4F6); }
+                .instance-status { margin-top: 6px; font-size: 0.82em; color: ${descriptionTextColor}; }
                 .result-item { display: flex; align-items: flex-start; gap: 16px; padding: 12px; border: 1px solid var(--divider-color, #4B5563); border-radius: 8px; background-color: ${resultItemBackgroundColor}; box-shadow: var(--ha-card-box-shadow, 0px 1px 2px 0px rgba(0,0,0,0.05)); ${disableHoverAnimation ? '' : 'transition: transform 0.2s ease-in-out;'} margin-bottom: 16px; }
                 .result-item:last-child { margin-bottom: 0; }
                 .result-item:hover { ${disableHoverAnimation ? '' : 'transform: translateY(-3px);'} }
@@ -266,103 +459,144 @@ const App = ({ hass, config }) => {
                 .title-icon { width: 24px; height: 24px; min-width: 24px; min-height: 24px; fill: var(--primary-color, #4CAF50); }
                 .add-button { padding: 10px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; transition: background-color 0.3s ease; flex: 1; text-align: center; text-transform: uppercase; background-color: ${addButtonColor}; color: white; margin-top: 10px; }
                 .add-button:hover { background-color: var(--success-color-dark, #45a049); }
-                .search-input-container { margin-bottom: 30px; }
+                .add-button:disabled { opacity: 0.5; cursor: not-allowed; }
+                .search-input-container { margin-bottom: 20px; }
                 .search-input-container input { width: 100%; padding-top: 16px; padding-bottom: 16px; font-size: 1.1em; }
             `
         ),
-        showTitle && window.React.createElement(
-            "div",
-            { className: "header" },
-            window.React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 576 512", className: "title-icon", style: { fill: 'var(--primary-color, #4CAF50)' } },
-            window.React.createElement("path", { d: "M316.9 18C311.6 7 300.4 0 288.1 0s-23.4 7-28.1 18L195 150.3 51.4 171.5c-12 1.8-22 10.2-25.7 21.7s-.7 24.2 7.9 32.7L137.8 329 113.2 474.7c-2.3 12.7 3.1 25.4 13.2 32.2s23.3 7.5 34 4.6L288.1 439.5l123.4 69.2c10.7 2.9 21.9 2.6 34-4.6s15.5-19.5 13.2-32.2L438.2 329l116.4-106.9c8.6-8.5 11.3-20.8 7.9-32.7s-13.7-19.9-25.7-21.7L381.2 150.3l-74.3-132.3z" })
+        showTitle &&
+            window.React.createElement(
+                'div',
+                { className: 'header' },
+                window.React.createElement(
+                    'svg',
+                    { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 576 512', className: 'title-icon', style: { fill: 'var(--primary-color, #4CAF50)' } },
+                    window.React.createElement('path', { d: 'M316.9 18C311.6 7 300.4 0 288.1 0s-23.4 7-28.1 18L195 150.3 51.4 171.5c-12 1.8-22 10.2-25.7 21.7s-.7 24.2 7.9 32.7L137.8 329 113.2 474.7c-2.3 12.7 3.1 25.4 13.2 32.2s23.3 7.5 34 4.6L288.1 439.5l123.4 69.2c10.7 2.9 21.9 2.6 34-4.6s15.5-19.5 13.2-32.2L438.2 329l116.4-106.9c8.6-8.5 11.3-20.8 7.9-32.7s-13.7-19.9-25.7-21.7L381.2 150.3l-74.3-132.3z' })
+                ),
+                customTitle
             ),
-            customTitle
+        window.React.createElement(
+            'div',
+            { className: 'instance-selector' },
+            window.React.createElement('label', { className: 'instance-label' }, 'Target Instance'),
+            window.React.createElement(
+                'select',
+                {
+                    className: 'instance-select',
+                    value: selectedInstanceValue,
+                    disabled: loadingInstances || instanceOptions.length === 0,
+                    onChange: (event) => setSelectedInstanceValue(event.target.value),
+                    'aria-label': 'Select Hassarr target instance',
+                },
+                instanceOptions.length === 0
+                    ? window.React.createElement('option', { value: '' }, loadingInstances ? 'Loading instances...' : 'No instances found')
+                    : instanceOptions.map((option) =>
+                          window.React.createElement('option', { key: option.value, value: option.value }, option.displayName)
+                      )
+            ),
+            instanceStatus && window.React.createElement('div', { className: 'instance-status' }, instanceStatus)
         ),
         window.React.createElement(
-            "div",
-            { className: "search-input-container" },
-            window.React.createElement("input", {
-                type: "text",
-                placeholder: "Search for movies or TV shows...",
-                className: "w-full p-3 rounded-md bg-gray-700 text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-200 ease-in-out border border-gray-600",
+            'div',
+            { className: 'search-input-container' },
+            window.React.createElement('input', {
+                type: 'text',
+                placeholder: 'Search for movies or TV shows...',
+                className: 'w-full p-3 rounded-md bg-gray-700 text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-200 ease-in-out border border-gray-600',
                 value: searchTerm,
-                onChange: (e) => setSearchTerm(e.target.value),
-                "aria-label": "Search media"
+                onChange: (event) => setSearchTerm(event.target.value),
+                'aria-label': 'Search media',
             })
         ),
-        loading && window.React.createElement(
-            "p",
-            { className: "text-center text-blue-300 animate-pulse" },
-            "Loading results..."
-        ),
-        error && window.React.createElement(
-            "p",
-            { className: "text-center text-red-400 p-2 bg-red-900 rounded-md" },
-            error
-        ),
-        message && window.React.createElement(
-            "p",
-            { className: "text-center text-green-400 p-2 bg-green-900 rounded-md" },
-            message
-        ),
-        searchResults.length > 0 && window.React.createElement(
-            "div",
-            { className: "results-container flex flex-col" },
-            searchResults.map((item) =>
-                window.React.createElement(
-                    "div",
-                    { key: item.id, className: "result-item" },
-                    window.React.createElement("img", {
-                        src: item.poster_path ? `${POSTER_BASE_URL}${item.poster_path}` : `https://placehold.co/185x278/1F2937/F3F4F6?text=No+Poster`,
-                        alt: item.title || 'No Title',
-                        className: "poster",
-                        onError: (e) => { e.target.onerror = null; e.target.src = `https://placehold.co/185x278/1F2937/F3F4F6?text=No+Poster`; }
-                    }),
+        loading &&
+            window.React.createElement(
+                'p',
+                { className: 'text-center text-blue-300 animate-pulse' },
+                'Loading results...'
+            ),
+        error &&
+            window.React.createElement(
+                'p',
+                { className: 'text-center text-red-400 p-2 bg-red-900 rounded-md' },
+                error
+            ),
+        message &&
+            window.React.createElement(
+                'p',
+                { className: 'text-center text-green-400 p-2 bg-green-900 rounded-md' },
+                message
+            ),
+        searchResults.length > 0 &&
+            window.React.createElement(
+                'div',
+                { className: 'results-container flex flex-col' },
+                searchResults.map((item) =>
                     window.React.createElement(
-                        "div",
-                        { className: "details" },
-                        window.React.createElement(
-                            "div",
-                            { className: "title" },
-                            item.title
-                        ),
-                        window.React.createElement(
-                            "div",
-                            { className: "media-info" },
-                            item.media_type === 'movie' ? 'Movie' : 'TV Show',
-                            item.release_date && ` (${new Date(item.release_date).getFullYear()})`,
-                            item.first_air_date && ` (${new Date(item.first_air_date).getFullYear()})`
-                        ),
-                        item.vote_average && item.vote_average > 0 && window.React.createElement(
-                            "div",
-                            { className: "ratings" },
-                            window.React.createElement(
-                                "div",
-                                { className: "rating-item" },
-                                window.React.createElement("svg", { xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 576 512", className: "w-4 h-4", style: { fill: 'var(--warning-color, #FFC107)' } },
-                                window.React.createElement("path", { d: "M316.9 18C311.6 7 300.4 0 288.1 0s-23.4 7-28.1 18L195 150.3 51.4 171.5c-12 1.8-22 10.2-25.7 21.7s-.7 24.2 7.9 32.7L137.8 329 113.2 474.7c-2.3 12.7 3.1 25.4 13.2 32.2s23.3 7.5 34 4.6L288.1 439.5l123.4 69.2c10.7 2.9 21.9 2.6 34-4.6s15.5-19.5 13.2-32.2L438.2 329l116.4-106.9c8.6-8.5 11.3-20.8 7.9-32.7s-13.7-19.9-25.7-21.7L381.2 150.3l-74.3-132.3z" })
-                                ),
-                                `${item.vote_average.toFixed(1)} / 10`
-                            )
-                        ),
-                        window.React.createElement(
-                            "button",
-                            {
-                                onClick: () => handleAddContent(item),
-                                className: "add-button",
-                                "aria-label": `Add ${item.title}`
+                        'div',
+                        { key: item.id, className: 'result-item' },
+                        window.React.createElement('img', {
+                            src: item.poster_path ? `${POSTER_BASE_URL}${item.poster_path}` : 'https://placehold.co/185x278/1F2937/F3F4F6?text=No+Poster',
+                            alt: item.title || 'No Title',
+                            className: 'poster',
+                            onError: (event) => {
+                                event.target.onerror = null;
+                                event.target.src = 'https://placehold.co/185x278/1F2937/F3F4F6?text=No+Poster';
                             },
-                            item.media_type === 'movie' ? 'Add & Update Quality' : 'Add'
+                        }),
+                        window.React.createElement(
+                            'div',
+                            { className: 'details' },
+                            window.React.createElement(
+                                'div',
+                                { className: 'title' },
+                                item.title
+                            ),
+                            window.React.createElement(
+                                'div',
+                                { className: 'media-info' },
+                                item.media_type === 'movie' ? 'Movie' : 'TV Show',
+                                item.release_date && ` (${new Date(item.release_date).getFullYear()})`,
+                                item.first_air_date && ` (${new Date(item.first_air_date).getFullYear()})`
+                            ),
+                            item.vote_average &&
+                                item.vote_average > 0 &&
+                                window.React.createElement(
+                                    'div',
+                                    { className: 'ratings' },
+                                    window.React.createElement(
+                                        'div',
+                                        { className: 'rating-item' },
+                                        window.React.createElement(
+                                            'svg',
+                                            { xmlns: 'http://www.w3.org/2000/svg', viewBox: '0 0 576 512', className: 'w-4 h-4', style: { fill: 'var(--warning-color, #FFC107)' } },
+                                            window.React.createElement('path', { d: 'M316.9 18C311.6 7 300.4 0 288.1 0s-23.4 7-28.1 18L195 150.3 51.4 171.5c-12 1.8-22 10.2-25.7 21.7s-.7 24.2 7.9 32.7L137.8 329 113.2 474.7c-2.3 12.7 3.1 25.4 13.2 32.2s23.3 7.5 34 4.6L288.1 439.5l123.4 69.2c10.7 2.9 21.9 2.6 34-4.6s15.5-19.5 13.2-32.2L438.2 329l116.4-106.9c8.6-8.5 11.3-20.8 7.9-32.7s-13.7-19.9-25.7-21.7L381.2 150.3l-74.3-132.3z' })
+                                        ),
+                                        `${item.vote_average.toFixed(1)} / 10`
+                                    )
+                                ),
+                            window.React.createElement(
+                                'button',
+                                {
+                                    onClick: () => handleAddContent(item),
+                                    className: 'add-button',
+                                    disabled: !selectedInstance,
+                                    'aria-label': `Add ${item.title}`,
+                                },
+                                'Add'
+                            )
                         )
                     )
                 )
+            ),
+        searchTerm &&
+            !loading &&
+            searchResults.length === 0 &&
+            !error &&
+            window.React.createElement(
+                'p',
+                { className: 'text-center text-gray-400 mt-4' },
+                `No results found for "${searchTerm}".`
             )
-        ),
-        searchTerm && !loading && searchResults.length === 0 && !error && window.React.createElement(
-            "p",
-            { className: "text-center text-gray-400 mt-4" },
-            `No results found for "${searchTerm}".`
-        )
     );
 };
 
