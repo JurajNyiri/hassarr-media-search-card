@@ -2,7 +2,7 @@
 
 A custom Lovelace card for Home Assistant that enables quick searching of Movies and TV Shows via TMDB and instantly adds them to your \*Arr stack (Radarr and Sonarr) using the **Hassarr** integration.
 
-This card is **specifically built to work with the data and service calls provided by the [Hassarr Integration](https://github.com/TegridyTate/Hassarr)**.
+This card is **specifically built to work with the data and service calls provided by the [Hassarr Integration](https://github.com/JurajNyiri/Hassarr)**.
 
 <img width="513" height="623" alt="image" src="https://github.com/user-attachments/assets/8b2d2e7d-7fd4-4718-930d-a8ba93b4564a" />
 
