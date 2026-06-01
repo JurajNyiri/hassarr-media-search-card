@@ -67,6 +67,25 @@ const cleanServiceInstanceName = (value) => {
         .trim();
 };
 
+const resolveSearchFieldTag = () => {
+    if (typeof customElements === 'undefined') {
+        return 'input';
+    }
+    if (customElements.get('ha-input-search')) {
+        return 'ha-input-search';
+    }
+    if (customElements.get('ha-textfield')) {
+        return 'ha-textfield';
+    }
+    if (customElements.get('ha-input')) {
+        return 'ha-input';
+    }
+    if (customElements.get('mwc-textfield')) {
+        return 'mwc-textfield';
+    }
+    return 'input';
+};
+
 /**
  * Main React component for the Home Assistant TMDB Search Card.
  * This component handles searching TMDB, displaying results, and triggering
@@ -113,6 +132,9 @@ const App = ({ hass, config }) => {
     const haSelectItemTag =
         typeof customElements !== 'undefined' && customElements.get('ha-list-item') ? 'ha-list-item' : 'mwc-list-item';
     const haSelectRef = window.React.useRef(null);
+    const searchFieldRef = window.React.useRef(null);
+    const [searchFieldTag, setSearchFieldTag] = window.React.useState(() => resolveSearchFieldTag());
+    const useCustomSearchField = searchFieldTag !== 'input';
     const handleInstanceSelectionChange = (event) => {
         const nextValue =
             (event && event.target && event.target.value) ||
@@ -164,6 +186,68 @@ const App = ({ hass, config }) => {
         selectElement.disabled = loadingInstances || instanceOptions.length === 0;
         selectElement.value = selectedInstanceValue || '';
     }, [haSelectAvailable, haSelectOptions, loadingInstances, instanceOptions.length, selectedInstanceValue]);
+
+    window.React.useEffect(() => {
+        if (typeof customElements === 'undefined' || typeof customElements.whenDefined !== 'function') {
+            return undefined;
+        }
+        let cancelled = false;
+        const maybeUpdateSearchTag = () => {
+            if (cancelled) {
+                return;
+            }
+            const nextTag = resolveSearchFieldTag();
+            setSearchFieldTag((currentTag) => (currentTag === nextTag ? currentTag : nextTag));
+        };
+
+        maybeUpdateSearchTag();
+
+        const watchTags = ['ha-input-search', 'ha-textfield', 'ha-input', 'mwc-textfield'];
+        watchTags.forEach((tagName) => {
+            customElements.whenDefined(tagName).then(maybeUpdateSearchTag).catch(() => {});
+        });
+
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    window.React.useEffect(() => {
+        if (!useCustomSearchField) {
+            return undefined;
+        }
+        const textFieldElement = searchFieldRef.current;
+        if (!textFieldElement || typeof textFieldElement.addEventListener !== 'function') {
+            return undefined;
+        }
+
+        const handleSearchInput = (event) => {
+            const nextValue =
+                (event && event.target && typeof event.target.value === 'string' && event.target.value) ||
+                (event && event.detail && typeof event.detail.value === 'string' && event.detail.value) ||
+                '';
+            setSearchTerm(nextValue);
+        };
+
+        textFieldElement.addEventListener('input', handleSearchInput);
+        textFieldElement.addEventListener('change', handleSearchInput);
+
+        return () => {
+            textFieldElement.removeEventListener('input', handleSearchInput);
+            textFieldElement.removeEventListener('change', handleSearchInput);
+        };
+    }, [useCustomSearchField, searchFieldTag]);
+
+    window.React.useEffect(() => {
+        if (!useCustomSearchField) {
+            return;
+        }
+        const textFieldElement = searchFieldRef.current;
+        if (!textFieldElement) {
+            return;
+        }
+        textFieldElement.value = searchTerm || '';
+    }, [useCustomSearchField, searchTerm, searchFieldTag]);
 
     const serviceSignature = window.React.useMemo(() => {
         const hassarrServices = hass && hass.services && hass.services[HASSARR_DOMAIN] ? hass.services[HASSARR_DOMAIN] : {};
@@ -625,6 +709,19 @@ const App = ({ hass, config }) => {
                     min-width: 0;
                     overflow: hidden;
                 }
+                .search-input-container > * {
+                    flex: 1 1 auto;
+                    min-width: 0;
+                    max-width: 100%;
+                }
+                .search-input-ha {
+                    display: block;
+                    flex: 1 1 auto;
+                    width: 100%;
+                    max-width: 100%;
+                    min-width: 0;
+                    align-self: stretch;
+                }
                 .search-input {
                     display: block;
                     flex: 1 1 auto;
@@ -727,14 +824,27 @@ const App = ({ hass, config }) => {
         window.React.createElement(
             'div',
             { className: 'search-input-container' },
-            window.React.createElement('input', {
-                type: 'text',
-                placeholder: 'Search for movies or TV shows...',
-                className: 'search-input',
-                value: searchTerm,
-                onChange: (event) => setSearchTerm(event.target.value),
-                'aria-label': 'Search media',
-            })
+            useCustomSearchField
+                ? window.React.createElement(searchFieldTag, {
+                      ref: searchFieldRef,
+                      className: 'search-input-ha',
+                      placeholder: 'Search for movies or TV shows...',
+                      'aria-label': 'Search media',
+                      style: { width: '100%', maxWidth: '100%', minWidth: '0', flex: '1 1 auto', alignSelf: 'stretch' },
+                      autocomplete: 'off',
+                      autocorrect: 'off',
+                      spellcheck: 'false',
+                      ...(searchFieldTag === 'ha-input-search' ? { width: 'full' } : {}),
+                      ...(searchFieldTag === 'mwc-textfield' ? { outlined: true } : {}),
+                  })
+                : window.React.createElement('input', {
+                      type: 'text',
+                      placeholder: 'Search for movies or TV shows...',
+                      className: 'search-input',
+                      value: searchTerm,
+                      onChange: (event) => setSearchTerm(event.target.value),
+                      'aria-label': 'Search media',
+                  })
         ),
         loading &&
             window.React.createElement(
