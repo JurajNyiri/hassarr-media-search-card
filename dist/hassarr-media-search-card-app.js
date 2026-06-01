@@ -97,6 +97,8 @@ const App = ({ hass, config }) => {
     // Other configuration options with defaults
     const showTitle = config.show_title !== false;
     const customTitle = config.custom_title || 'Media Search';
+    const targetInstanceSubtitle =
+        typeof config.target_instance_subtitle === 'string' ? config.target_instance_subtitle : 'Target Instance';
     const resultItemBackgroundColor = config.result_item_background_color || 'var(--secondary-background-color, #374151)';
     const disableHoverAnimation = config.disable_hover_animation === true;
     const titleTextColor = config.title_text_color || 'var(--primary-text-color, #F3F4F6)';
@@ -687,14 +689,14 @@ const App = ({ hass, config }) => {
         window.React.createElement(
             'div',
             { className: 'instance-selector' },
-            window.React.createElement('label', { className: 'instance-label' }, 'Target Instance'),
+            window.React.createElement('label', { className: 'instance-label' }, targetInstanceSubtitle),
             haSelectAvailable
                 ? window.React.createElement(
                       'ha-select',
                       {
                           ref: haSelectRef,
                           className: 'instance-select-ha',
-                          'aria-label': 'Select Hassarr target instance',
+                          'aria-label': targetInstanceSubtitle || 'Select Hassarr target instance',
                       },
                       instanceOptions.length === 0
                           ? window.React.createElement(
@@ -713,7 +715,7 @@ const App = ({ hass, config }) => {
                           value: selectedInstanceValue,
                           disabled: loadingInstances || instanceOptions.length === 0,
                           onChange: handleInstanceSelectionChange,
-                          'aria-label': 'Select Hassarr target instance',
+                          'aria-label': targetInstanceSubtitle || 'Select Hassarr target instance',
                       },
                       instanceOptions.length === 0
                           ? window.React.createElement('option', { value: '' }, loadingInstances ? 'Loading instances...' : 'No instances found')

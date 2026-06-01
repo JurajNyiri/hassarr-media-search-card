@@ -66,6 +66,7 @@ The card now auto-detects Hassarr config entries and shows a **Target Instance**
 | :--- | :---: | :--- | :--- |
 | **`show_title`** | `true` | `boolean` | Toggles the visibility of the card header. |
 | **`custom_title`** | `Media Search` | `string` | Custom text to display in the card header. |
+| **`target_instance_subtitle`** | `Target Instance` | `string` | Custom text shown above the instance selector. |
 | **`result_item_background_color`** | `var(--secondary-background-color)` | `string` | Custom CSS color for the background of individual search results (e.g., `#374151`). |
 | **`disable_hover_animation`** | `false` | `boolean` | If set to `true`, disables the subtle lift effect when hovering over results. |
 | **`title_text_color`** | `var(--primary-text-color)` | `string` | Custom CSS color for the media titles. |
@@ -83,5 +84,6 @@ tmdb_api_key: !secret tmdb_api_key
 
 # Optional Customization
 custom_title: 'Request Media'
+target_instance_subtitle: 'Library'
 show_title: true
 add_button_color: '#8A2BE2' # Custom button color (Blue Violet)
