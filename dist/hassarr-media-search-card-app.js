@@ -566,32 +566,32 @@ const App = ({ hass, config }) => {
                 .animate-pulse { animation: pulse 1.5s ease-in-out infinite; }
                 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.65; } }
                 .card-shell {
-                    padding: 16px;
-                    background-color: #1F2937;
-                    border: 1px solid #374151;
-                    border-radius: 10px;
-                    color: #F3F4F6;
-                    box-shadow: var(--ha-card-box-shadow, 0px 10px 20px rgba(0, 0, 0, 0.25));
-                    font-family: 'Segoe UI', Roboto, Arial, sans-serif;
-                    overflow: hidden;
+                    padding: 0;
+                    background: transparent;
+                    border: 0;
+                    border-radius: 0;
+                    color: var(--primary-text-color);
+                    box-shadow: none;
+                    font-family: inherit;
+                    overflow: visible;
                 }
                 .card-shell, .card-shell * { box-sizing: border-box; }
                 .results-container::-webkit-scrollbar { width: 8px; }
                 .results-container::-webkit-scrollbar-track { background: #374151; border-radius: 10px; }
                 .results-container::-webkit-scrollbar-thumb { background: #6B7280; border-radius: 10px; }
                 .results-container::-webkit-scrollbar-thumb:hover { background: #9CA3AF; }
-                .header { font-size: 1.5em; font-weight: bold; margin-bottom: 16px; color: var(--primary-color, #4CAF50); display: flex; align-items: center; gap: 8px; }
-                .header ha-icon { color: var(--primary-color, #4CAF50); }
+                .header { font-size: 1.5em; font-weight: 500; margin-bottom: 16px; color: var(--primary-text-color); display: flex; align-items: center; gap: 8px; }
+                .header ha-icon { color: var(--primary-text-color); }
                 .instance-selector { margin-bottom: 16px; }
                 .instance-label { display: block; margin-bottom: 8px; font-size: 0.85em; font-weight: 600; color: ${descriptionTextColor}; text-transform: uppercase; letter-spacing: 0.04em; }
                 .instance-select {
                     width: 100%;
                     min-height: 56px;
                     padding: 0 12px;
-                    border-radius: 6px;
+                    border-radius: 10px;
                     border: 1px solid var(--input-outlined-idle-border-color, var(--divider-color, #4B5563));
-                    background-color: var(--ha-input-fill-color, var(--secondary-background-color, #374151));
-                    color: var(--primary-text-color, #F3F4F6);
+                    background-color: var(--ha-input-fill-color, var(--secondary-background-color));
+                    color: var(--primary-text-color);
                     font: inherit;
                 }
                 .instance-select:focus {
@@ -635,19 +635,18 @@ const App = ({ hass, config }) => {
                     padding-top: 16px;
                     padding-bottom: 16px;
                     font-size: 1.1em;
-                    border-radius: 6px;
-                    border: 1px solid #4B5563;
-                    background-color: #374151;
-                    color: #F3F4F6;
+                    border-radius: 10px;
+                    border: 1px solid var(--input-outlined-idle-border-color, var(--divider-color, #4B5563));
+                    background-color: var(--ha-input-fill-color, var(--secondary-background-color));
+                    color: var(--primary-text-color);
                     padding-left: 12px;
                     padding-right: 12px;
-                    transition: border-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+                    transition: border-color 0.2s ease-in-out;
                 }
-                .search-input::placeholder { color: #9CA3AF; }
+                .search-input::placeholder { color: var(--secondary-text-color); }
                 .search-input:focus {
                     outline: none;
-                    border-color: #3B82F6;
-                    box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.9);
+                    border-color: var(--input-outlined-hover-border-color, var(--primary-color, #3B82F6));
                 }
                 .status-loading {
                     text-align: center;
