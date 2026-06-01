@@ -28,6 +28,8 @@ const debounce = (func, delay) => {
 const HASSARR_DOMAIN = 'hassarr';
 const MOVIE_SERVICE_BASE = 'add_radarr_movie';
 const TV_SERVICE_BASE = 'add_sonarr_tv_show';
+const FALLBACK_POSTER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 185 278" width="185" height="278"><rect width="185" height="278" fill="#1F2937"/><text x="92.5" y="139" fill="#F3F4F6" font-family="Arial, sans-serif" font-size="18" text-anchor="middle" dominant-baseline="middle">No Poster</text></svg>`;
+const FALLBACK_POSTER_URL = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(FALLBACK_POSTER_SVG)}`;
 
 const extractServiceSuffix = (serviceName, baseName) => {
     const prefix = `${baseName}_`;
@@ -38,6 +40,32 @@ const extractServiceSuffix = (serviceName, baseName) => {
 };
 
 const asArray = (value) => (Array.isArray(value) ? value : []);
+
+const ULID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/i;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const HEX32_PATTERN = /^[0-9a-f]{32}$/i;
+
+const looksLikeOpaqueId = (value) => {
+    if (typeof value !== 'string') {
+        return false;
+    }
+    const text = value.trim();
+    if (!text) {
+        return false;
+    }
+    return ULID_PATTERN.test(text) || UUID_PATTERN.test(text) || HEX32_PATTERN.test(text);
+};
+
+const cleanServiceInstanceName = (value) => {
+    if (typeof value !== 'string') {
+        return '';
+    }
+    return value
+        .replace(/^add\s+radarr\s+movie(?:\s*[-:])?\s*/i, '')
+        .replace(/^add\s+sonarr\s+tv\s+show(?:\s*[-:])?\s*/i, '')
+        .replace(/^hassarr(?:\s*[-:])?\s*/i, '')
+        .trim();
+};
 
 /**
  * Main React component for the Home Assistant TMDB Search Card.
@@ -79,6 +107,61 @@ const App = ({ hass, config }) => {
         () => instanceOptions.find((option) => option.value === selectedInstanceValue) || null,
         [instanceOptions, selectedInstanceValue]
     );
+    const haSelectAvailable = typeof customElements !== 'undefined' && Boolean(customElements.get('ha-select'));
+    const haSelectItemTag =
+        typeof customElements !== 'undefined' && customElements.get('ha-list-item') ? 'ha-list-item' : 'mwc-list-item';
+    const haSelectRef = window.React.useRef(null);
+    const handleInstanceSelectionChange = (event) => {
+        const nextValue =
+            (event && event.target && event.target.value) ||
+            (event && event.detail && event.detail.value) ||
+            (event && event.detail && event.detail.item && event.detail.item.value) ||
+            '';
+        setSelectedInstanceValue(String(nextValue || ''));
+    };
+    const haSelectOptions = window.React.useMemo(
+        () => instanceOptions.map((option) => ({ value: option.value, label: option.displayName })),
+        [instanceOptions]
+    );
+
+    window.React.useEffect(() => {
+        if (!haSelectAvailable) {
+            return undefined;
+        }
+        const selectElement = haSelectRef.current;
+        if (!selectElement || typeof selectElement.addEventListener !== 'function') {
+            return undefined;
+        }
+
+        const handleSelected = (event) => {
+            const nextValue =
+                (event && event.detail && event.detail.value) ||
+                (event && event.target && event.target.value) ||
+                '';
+            setSelectedInstanceValue(String(nextValue || ''));
+        };
+
+        selectElement.addEventListener('selected', handleSelected);
+        selectElement.addEventListener('change', handleSelected);
+
+        return () => {
+            selectElement.removeEventListener('selected', handleSelected);
+            selectElement.removeEventListener('change', handleSelected);
+        };
+    }, [haSelectAvailable]);
+
+    window.React.useEffect(() => {
+        if (!haSelectAvailable) {
+            return;
+        }
+        const selectElement = haSelectRef.current;
+        if (!selectElement) {
+            return;
+        }
+        selectElement.options = haSelectOptions;
+        selectElement.disabled = loadingInstances || instanceOptions.length === 0;
+        selectElement.value = selectedInstanceValue || '';
+    }, [haSelectAvailable, haSelectOptions, loadingInstances, instanceOptions.length, selectedInstanceValue]);
 
     const serviceSignature = window.React.useMemo(() => {
         const hassarrServices = hass && hass.services && hass.services[HASSARR_DOMAIN] ? hass.services[HASSARR_DOMAIN] : {};
@@ -181,13 +264,32 @@ const App = ({ hass, config }) => {
                     return null;
                 }
 
-                const title = entry.title || entry.name || `Hassarr ${index + 1}`;
+                const serviceLabelCandidates = [
+                    movieService && hassarrServices[movieService] ? hassarrServices[movieService].name : null,
+                    tvService && hassarrServices[tvService] ? hassarrServices[tvService].name : null,
+                ];
+                const serviceLabel = serviceLabelCandidates
+                    .map((label) => cleanServiceInstanceName(label))
+                    .find((label) => label && !looksLikeOpaqueId(label));
+
+                const titleCandidates = [
+                    entry.title,
+                    entry.name,
+                    entry.data && entry.data.title,
+                    entry.data && entry.data.name,
+                    entry.options && entry.options.title,
+                    entry.options && entry.options.name,
+                    serviceLabel,
+                ];
+                const title = titleCandidates
+                    .map((candidate) => (typeof candidate === 'string' ? candidate.trim() : ''))
+                    .find((candidate) => candidate && candidate !== entryId && !looksLikeOpaqueId(candidate));
                 return {
                     value: entryId,
                     entry_id: entryId,
                     suffix,
-                    title,
-                    displayName: title,
+                    title: title || `Hassarr ${suffix}`,
+                    displayName: title || `Hassarr ${suffix}`,
                     movieService,
                     tvService,
                     includeInstanceField: movieService === MOVIE_SERVICE_BASE || tvService === TV_SERVICE_BASE,
@@ -428,15 +530,50 @@ const App = ({ hass, config }) => {
     return window.React.createElement(
         'div',
         {
-            className: 'p-4 bg-gray-800 text-gray-100 rounded-lg shadow-lg font-inter border border-gray-700',
+            className: 'card-shell',
         },
         // Custom CSS for Pulsarr-like styling and scrollbar
         window.React.createElement(
             'style',
             null,
             `
-                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-                .font-inter { font-family: 'Inter', sans-serif; }
+                .font-inter { font-family: 'Segoe UI', Roboto, Arial, sans-serif; }
+                .p-4 { padding: 16px; }
+                .p-3 { padding: 12px; }
+                .p-2 { padding: 8px; }
+                .w-full { width: 100%; }
+                .rounded-lg { border-radius: 8px; }
+                .rounded-md { border-radius: 6px; }
+                .bg-gray-800 { background-color: #1F2937; }
+                .bg-gray-700 { background-color: #374151; }
+                .bg-red-900 { background-color: #7F1D1D; }
+                .bg-green-900 { background-color: #14532D; }
+                .text-gray-100 { color: #F3F4F6; }
+                .text-gray-400 { color: #9CA3AF; }
+                .text-blue-300 { color: #93C5FD; }
+                .text-red-400 { color: #F87171; }
+                .text-green-400 { color: #4ADE80; }
+                .text-center { text-align: center; }
+                .border { border: 1px solid transparent; }
+                .border-gray-700 { border-color: #374151; }
+                .border-gray-600 { border-color: #4B5563; }
+                .shadow-lg { box-shadow: var(--ha-card-box-shadow, 0px 10px 20px rgba(0, 0, 0, 0.25)); }
+                .mt-4 { margin-top: 16px; }
+                .flex { display: flex; }
+                .flex-col { flex-direction: column; }
+                .animate-pulse { animation: pulse 1.5s ease-in-out infinite; }
+                @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.65; } }
+                .card-shell {
+                    padding: 16px;
+                    background-color: #1F2937;
+                    border: 1px solid #374151;
+                    border-radius: 10px;
+                    color: #F3F4F6;
+                    box-shadow: var(--ha-card-box-shadow, 0px 10px 20px rgba(0, 0, 0, 0.25));
+                    font-family: 'Segoe UI', Roboto, Arial, sans-serif;
+                    overflow: hidden;
+                }
+                .card-shell, .card-shell * { box-sizing: border-box; }
                 .results-container::-webkit-scrollbar { width: 8px; }
                 .results-container::-webkit-scrollbar-track { background: #374151; border-radius: 10px; }
                 .results-container::-webkit-scrollbar-thumb { background: #6B7280; border-radius: 10px; }
@@ -445,7 +582,24 @@ const App = ({ hass, config }) => {
                 .header ha-icon { color: var(--primary-color, #4CAF50); }
                 .instance-selector { margin-bottom: 16px; }
                 .instance-label { display: block; margin-bottom: 8px; font-size: 0.85em; font-weight: 600; color: ${descriptionTextColor}; text-transform: uppercase; letter-spacing: 0.04em; }
-                .instance-select { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid var(--divider-color, #4B5563); background-color: #111827; color: var(--primary-text-color, #F3F4F6); }
+                .instance-select {
+                    width: 100%;
+                    min-height: 56px;
+                    padding: 0 12px;
+                    border-radius: 6px;
+                    border: 1px solid var(--input-outlined-idle-border-color, var(--divider-color, #4B5563));
+                    background-color: var(--ha-input-fill-color, var(--secondary-background-color, #374151));
+                    color: var(--primary-text-color, #F3F4F6);
+                    font: inherit;
+                }
+                .instance-select:focus {
+                    outline: none;
+                    border-color: var(--input-outlined-hover-border-color, var(--primary-color, #3B82F6));
+                }
+                .instance-select-ha {
+                    display: block;
+                    width: 100%;
+                }
                 .instance-status { margin-top: 6px; font-size: 0.82em; color: ${descriptionTextColor}; }
                 .result-item { display: flex; align-items: flex-start; gap: 16px; padding: 12px; border: 1px solid var(--divider-color, #4B5563); border-radius: 8px; background-color: ${resultItemBackgroundColor}; box-shadow: var(--ha-card-box-shadow, 0px 1px 2px 0px rgba(0,0,0,0.05)); ${disableHoverAnimation ? '' : 'transition: transform 0.2s ease-in-out;'} margin-bottom: 16px; }
                 .result-item:last-child { margin-bottom: 0; }
@@ -460,8 +614,63 @@ const App = ({ hass, config }) => {
                 .add-button { padding: 10px 16px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; transition: background-color 0.3s ease; flex: 1; text-align: center; text-transform: uppercase; background-color: ${addButtonColor}; color: white; margin-top: 10px; }
                 .add-button:hover { background-color: var(--success-color-dark, #45a049); }
                 .add-button:disabled { opacity: 0.5; cursor: not-allowed; }
-                .search-input-container { margin-bottom: 20px; }
-                .search-input-container input { width: 100%; padding-top: 16px; padding-bottom: 16px; font-size: 1.1em; }
+                .search-input-container {
+                    margin-bottom: 20px;
+                    display: flex;
+                    align-items: stretch;
+                    width: 100%;
+                    max-width: 100%;
+                    min-width: 0;
+                    overflow: hidden;
+                }
+                .search-input {
+                    display: block;
+                    flex: 1 1 auto;
+                    width: 100%;
+                    max-width: 100%;
+                    min-width: 0;
+                    margin: 0;
+                    padding-top: 16px;
+                    padding-bottom: 16px;
+                    font-size: 1.1em;
+                    border-radius: 6px;
+                    border: 1px solid #4B5563;
+                    background-color: #374151;
+                    color: #F3F4F6;
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    transition: border-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+                }
+                .search-input::placeholder { color: #9CA3AF; }
+                .search-input:focus {
+                    outline: none;
+                    border-color: #3B82F6;
+                    box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.9);
+                }
+                .status-loading {
+                    text-align: center;
+                    color: #93C5FD;
+                    animation: pulse 1.5s ease-in-out infinite;
+                }
+                .status-error {
+                    text-align: center;
+                    color: #F87171;
+                    padding: 8px;
+                    background-color: #7F1D1D;
+                    border-radius: 6px;
+                }
+                .status-success {
+                    text-align: center;
+                    color: #4ADE80;
+                    padding: 8px;
+                    background-color: #14532D;
+                    border-radius: 6px;
+                }
+                .status-empty {
+                    text-align: center;
+                    color: #9CA3AF;
+                    margin-top: 16px;
+                }
             `
         ),
         showTitle &&
@@ -479,21 +688,39 @@ const App = ({ hass, config }) => {
             'div',
             { className: 'instance-selector' },
             window.React.createElement('label', { className: 'instance-label' }, 'Target Instance'),
-            window.React.createElement(
-                'select',
-                {
-                    className: 'instance-select',
-                    value: selectedInstanceValue,
-                    disabled: loadingInstances || instanceOptions.length === 0,
-                    onChange: (event) => setSelectedInstanceValue(event.target.value),
-                    'aria-label': 'Select Hassarr target instance',
-                },
-                instanceOptions.length === 0
-                    ? window.React.createElement('option', { value: '' }, loadingInstances ? 'Loading instances...' : 'No instances found')
-                    : instanceOptions.map((option) =>
-                          window.React.createElement('option', { key: option.value, value: option.value }, option.displayName)
-                      )
-            ),
+            haSelectAvailable
+                ? window.React.createElement(
+                      'ha-select',
+                      {
+                          ref: haSelectRef,
+                          className: 'instance-select-ha',
+                          'aria-label': 'Select Hassarr target instance',
+                      },
+                      instanceOptions.length === 0
+                          ? window.React.createElement(
+                                haSelectItemTag,
+                                { value: '', disabled: true },
+                                loadingInstances ? 'Loading instances...' : 'No instances found'
+                            )
+                          : instanceOptions.map((option) =>
+                                window.React.createElement(haSelectItemTag, { key: option.value, value: option.value }, option.displayName)
+                            )
+                  )
+                : window.React.createElement(
+                      'select',
+                      {
+                          className: 'instance-select',
+                          value: selectedInstanceValue,
+                          disabled: loadingInstances || instanceOptions.length === 0,
+                          onChange: handleInstanceSelectionChange,
+                          'aria-label': 'Select Hassarr target instance',
+                      },
+                      instanceOptions.length === 0
+                          ? window.React.createElement('option', { value: '' }, loadingInstances ? 'Loading instances...' : 'No instances found')
+                          : instanceOptions.map((option) =>
+                                window.React.createElement('option', { key: option.value, value: option.value }, option.displayName)
+                            )
+                  ),
             instanceStatus && window.React.createElement('div', { className: 'instance-status' }, instanceStatus)
         ),
         window.React.createElement(
@@ -502,7 +729,7 @@ const App = ({ hass, config }) => {
             window.React.createElement('input', {
                 type: 'text',
                 placeholder: 'Search for movies or TV shows...',
-                className: 'w-full p-3 rounded-md bg-gray-700 text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-200 ease-in-out border border-gray-600',
+                className: 'search-input',
                 value: searchTerm,
                 onChange: (event) => setSearchTerm(event.target.value),
                 'aria-label': 'Search media',
@@ -511,19 +738,19 @@ const App = ({ hass, config }) => {
         loading &&
             window.React.createElement(
                 'p',
-                { className: 'text-center text-blue-300 animate-pulse' },
+                { className: 'status-loading' },
                 'Loading results...'
             ),
         error &&
             window.React.createElement(
                 'p',
-                { className: 'text-center text-red-400 p-2 bg-red-900 rounded-md' },
+                { className: 'status-error' },
                 error
             ),
         message &&
             window.React.createElement(
                 'p',
-                { className: 'text-center text-green-400 p-2 bg-green-900 rounded-md' },
+                { className: 'status-success' },
                 message
             ),
         searchResults.length > 0 &&
@@ -535,12 +762,12 @@ const App = ({ hass, config }) => {
                         'div',
                         { key: item.id, className: 'result-item' },
                         window.React.createElement('img', {
-                            src: item.poster_path ? `${POSTER_BASE_URL}${item.poster_path}` : 'https://placehold.co/185x278/1F2937/F3F4F6?text=No+Poster',
+                            src: item.poster_path ? `${POSTER_BASE_URL}${item.poster_path}` : FALLBACK_POSTER_URL,
                             alt: item.title || 'No Title',
                             className: 'poster',
                             onError: (event) => {
                                 event.target.onerror = null;
-                                event.target.src = 'https://placehold.co/185x278/1F2937/F3F4F6?text=No+Poster';
+                                event.target.src = FALLBACK_POSTER_URL;
                             },
                         }),
                         window.React.createElement(
@@ -594,7 +821,7 @@ const App = ({ hass, config }) => {
             !error &&
             window.React.createElement(
                 'p',
-                { className: 'text-center text-gray-400 mt-4' },
+                { className: 'status-empty' },
                 `No results found for "${searchTerm}".`
             )
     );

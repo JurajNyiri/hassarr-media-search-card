@@ -15,10 +15,17 @@
 // my-hassarr-search-card.js
 // This file integrates the React component into Home Assistant Lovelace.
 
-// Import necessary modules from LitElement
-import { LitElement, html, css } from 'https://unpkg.com/lit-element@2.4.0/lit-element.js?module';
-
 import App from './hassarr-media-search-card-app.js'; // Path to your React App component
+
+// Reuse the Lit runtime already shipped with Home Assistant.
+const HaLovelaceElement = customElements.get('ha-panel-lovelace') || customElements.get('hui-view');
+const LitElement = HaLovelaceElement ? Object.getPrototypeOf(HaLovelaceElement) : null;
+const html = LitElement && LitElement.prototype ? LitElement.prototype.html : null;
+const css = LitElement && LitElement.prototype ? LitElement.prototype.css : null;
+
+if (!LitElement || !html || !css) {
+  throw new Error('Unable to resolve Home Assistant LitElement runtime.');
+}
 
 // Load React and ReactDOM as global scripts (UMD builds)
 // IMPORTANT: Use the full /local/ path to ensure correct loading by Home Assistant's web server
@@ -184,9 +191,3 @@ class HassarrMediaSearchCard extends LitElement {
 
 // Register the custom element with a unique tag name
 customElements.define('hassarr-media-search-card', HassarrMediaSearchCard);
-
-// Load Tailwind CSS from CDN. This is placed here to ensure it's available
-// when the React component renders.
-const tailwindScript = document.createElement('script');
-tailwindScript.src = 'https://cdn.tailwindcss.com';
-document.head.appendChild(tailwindScript);
